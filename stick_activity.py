@@ -2,19 +2,11 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import math
-import time
-from collections import defaultdict
 
 # Initialize MediaPipe Pose
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose()
 mp_drawing = mp.solutions.drawing_utils
-
-# Initialize action logs
-action_log = []  # To store action logs with start and stop times
-action_frequency = defaultdict(int)  # To store the count of each action
-current_action = None  # Tracks the current action
-action_start_time = None  # Start time of the current action
 
 # Function to calculate the angle between three points
 def calculate_angle(a, b, c):
@@ -36,7 +28,7 @@ def classify_action(landmarks, height_threshold, prev_positions):
         # Extract key points
         left_wrist = landmarks[mp_pose.PoseLandmark.LEFT_WRIST.value]
         right_wrist = landmarks[mp_pose.PoseLandmark.RIGHT_WRIST.value]
-        left_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
+        left_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value]  
         right_shoulder = landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
         left_hip = landmarks[mp_pose.PoseLandmark.LEFT_HIP.value]
         right_hip = landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value]
@@ -66,10 +58,18 @@ def classify_action(landmarks, height_threshold, prev_positions):
         if left_knee_angle < 120 and right_knee_angle < 120 and left_hip_angle > 90 and right_hip_angle > 90:
             return "Sitting"
 
-        # # Waving detection
-        # if wrist_movement > 30 and (left_wrist[1] < left_shoulder[1] or right_wrist[1] < right_shoulder[1]):
-        #     return "Waving"
+        # Punching detection
+        if left_wrist[0] > left_shoulder[0] + 50 or right_wrist[0] > right_shoulder[0] + 50:
+            return "Punching"
         
+        # # Kicking detection
+        # left_kick_distance = abs(left_ankle[1] - left_hip[1])
+        # right_kick_distance = abs(right_ankle[1] - right_hip[1])
+        # kick_threshold = 300  
+
+        # if left_kick_distance > kick_threshold or right_kick_distance > kick_threshold:
+        #     return "Kicking"
+
         # Kicking detection using angles
         left_knee_angle = calculate_angle(left_hip, left_knee, left_ankle)
         right_knee_angle = calculate_angle(right_hip, right_knee, right_ankle)
@@ -77,29 +77,27 @@ def classify_action(landmarks, height_threshold, prev_positions):
 
         if left_knee_angle < kick_angle_threshold or right_knee_angle < kick_angle_threshold:
            return "Kicking"
-
-        # Punching detection
-        if left_wrist[0] > left_shoulder[0] + 50 or right_wrist[0] > right_shoulder[0] + 50:
-            return "Punching"
-
+        
         # Default to standing or moving
         if nose[1] > height_threshold:
             return "Standing"
         else:
             return "Moving"
-
+        
+        
     return "Unknown"
 
-# Function to detect actions
-def detect_action(frame, prev_positions):
-    global action_log  # To store action logs with start and stop times
-    global action_frequency   # To store the count of each action
-    global current_action   # Tracks the current action
-    global action_start_time   # Start time of the current action
-    global current_action
-    
-    frame_height, frame_width = frame.shape[:2]
-    height_threshold = frame_height * 0.5
+# Start webcam feed
+cap = cv2.VideoCapture(0)
+frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+prev_positions = {}
+
+while cap.isOpened():
+    success, frame = cap.read()
+    if not success:
+        print("Ignoring empty frame.")
+        continue
 
     # Convert the frame to RGB
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -107,34 +105,33 @@ def detect_action(frame, prev_positions):
     # Perform pose detection
     results = pose.process(rgb_frame)
 
+    # Create a blank black image
+    black_frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
+
     # Extract landmarks
     landmarks = None
     if results.pose_landmarks:
-        landmarks = [
-            (lm.x * frame_width, lm.y * frame_height)
-            for lm in results.pose_landmarks.landmark
-        ]
+        mp_drawing.draw_landmarks(
+            black_frame, results.pose_landmarks, mp_pose.POSE_CONNECTIONS,
+            mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
+            mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=2, circle_radius=2)
+        )
+        landmarks = [(lm.x * frame.shape[1], lm.y * frame.shape[0]) for lm in results.pose_landmarks.landmark]
 
-    # Classify action
+    # Determine the action
+    height_threshold = frame_height * 0.5
     action = classify_action(landmarks, height_threshold, prev_positions)
 
-     # Log actions into action_log and action_frequency
-    current_time = time.time()
-    if action != current_action:
-        # Log the previous action
-        if current_action is not None:
-            stop_time = current_time
-            action_duration = stop_time - action_start_time
-            if action_duration >= 2:  # Only log if the action lasted 3 or more seconds
-                action_log.append({
-                    "action": current_action,
-                    "start": action_start_time,
-                    "stop": stop_time
-                })
-                action_frequency[current_action] += 1
+    # Display action on the blank frame
+    cv2.rectangle(black_frame, (0, 0), (300, 50), (0, 0, 0), -1)
+    cv2.putText(black_frame, f'Action: {action}', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
-        # Update the current action and start time
-        current_action = action
-        action_start_time = current_time
+    # Show the frame
+    cv2.imshow('Stick Figure Activity Recognition', black_frame)
 
-    return action, action_log, dict(action_frequency)
+    # Exit with 'q'
+    if cv2.waitKey(10) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
